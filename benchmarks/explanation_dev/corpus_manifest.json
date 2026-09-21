@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "self_authored": true,
+  "expert_validated": false,
+  "research_use": "exposed_development_only",
+  "provenance": "Synthetic fictional museum documents authored alongside explanation development. All cases and rubrics are exposed development inputs, not an unseen holdout or independent scientific validation.",
+  "documents": [
+    {"source": "dev/shadow_mechanism.txt", "approved": true, "effective_date": null},
+    {"source": "dev/shadow_operations.txt", "approved": true, "effective_date": null},
+    {"source": "dev/rolling_short.txt", "approved": true, "effective_date": null},
+    {"source": "dev/rolling_long.txt", "approved": true, "effective_date": null},
+    {"source": "dev/light_box_a.txt", "approved": true, "effective_date": "2026-09-01"},
+    {"source": "dev/light_box_b.txt", "approved": true, "effective_date": "2026-09-01"}
+  ]
+}

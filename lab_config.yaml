@@ -1,0 +1,22 @@
+ollama:
+  base_url: http://127.0.0.1:11435
+  embedding_model: embeddinggemma
+  generation_model: qwen3:4b-instruct-2507-q4_K_M
+  allowed_models:
+    - embeddinggemma
+    - qwen3:1.7b
+    - qwen3.5:2b
+    - qwen3:4b-instruct-2507-q4_K_M
+  context_length: 4096
+  timeout_seconds: 90
+storage:
+  root: data/lab
+logging:
+  enabled: false
+  retention_days: 7
+retrieval:
+  chunk_size: 800
+  overlap: 120
+  max_evidence: 3
+  max_context_chars: 1800
+  threshold: 0.75

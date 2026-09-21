@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "run_id": "smoke-20260811-initial",
+  "recorded_at": "2026-08-11",
+  "research_use": "smoke_only",
+  "source_git_commit": "4024243364439ca6f428205d826541c1f5d7d3c0",
+  "dataset_sha256": "b2ca40dfd22945075a3ec825316b690973fe5cbdac41c4cca7841cdef9c725bc",
+  "configuration": {
+    "chunk_size": 800,
+    "chunk_overlap": 120,
+    "top_k": 5,
+    "distance_threshold": 0.75,
+    "embedding_model": "embeddinggemma",
+    "generation_model": "qwen3:1.7b"
+  },
+  "metrics": {
+    "total": 9,
+    "status_accuracy": 1.0,
+    "false_answer_rate": 0.0,
+    "false_refusal_rate": 0.0,
+    "error_rate": 0.0,
+    "distance_gate_accuracy": 1.0,
+    "distance_false_accept_rate": 0.0,
+    "distance_false_reject_rate": 0.0,
+    "retrieval_hit_rate_at_5": 1.0,
+    "mean_reciprocal_rank_at_5": 1.0,
+    "answerability_accuracy": 1.0,
+    "median_elapsed_seconds": 10.783,
+    "p95_elapsed_seconds": 68.3506
+  },
+  "case_elapsed_seconds": {
+    "answerable": [72.103, 62.722, 28.897],
+    "unrelated": [0.28, 0.263, 0.259],
+    "insufficient": [11.171, 10.37, 10.783]
+  },
+  "interpretation": [
+    "9問は既にデモとthreshold調整に使用したsmoke splitであり、研究上の性能や汎化を示さない。",
+    "このrunではStatus、distance gate、Gold Source、answerabilityが全件期待どおりだった。",
+    "回答生成を行うCaseが最も遅く、次のEngineering計測ではretrieval、gate、generationの段階別Latencyを分離する必要がある。"
+  ]
+}

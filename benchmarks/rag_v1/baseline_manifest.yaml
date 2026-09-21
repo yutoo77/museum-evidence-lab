@@ -1,0 +1,51 @@
+schema_version: 1
+baseline_id: "rag-smoke-2026-08-11"
+recorded_at: "2026-08-11"
+purpose: "公開可能な架空資料によるBenchmark基盤の再現確認"
+research_use: "smoke_only"
+
+source:
+  git_commit_before_benchmark_work: "4024243364439ca6f428205d826541c1f5d7d3c0"
+  note: "このcommitは既存RAG Baselineの参照点。Benchmarkと研究文書は未Commitの追加物。"
+
+runtime:
+  python: "3.11.1"
+  ollama:
+    generation_model:
+      configured_name: "qwen3:1.7b"
+      local_id: "8f68893c685c"
+    embedding_model:
+      configured_name: "embeddinggemma"
+      installed_name: "embeddinggemma:latest"
+      local_id: "85462619ee72"
+
+rag_config:
+  chunk_size: 800
+  chunk_overlap: 120
+  top_k: 5
+  distance_threshold: 0.75
+  note: "0.75は既存9問デモで調整済み。研究用testの性能値として使用しない。"
+
+sha256:
+  config_yaml: "cff4210723b563a259605055d9f30de29b1611ab239146f78c5a7d9f6c5ec0ce"
+  environment_snapshot: "36a7c8cdc3feccc1b921568d8983ff3d4394d76660c4228b221cd1e8247ff2fb"
+  legacy_evaluation_questions_json: "02681a11c0bac59a6714076141702126d2f16094ab70b73278e449f98d6b5ce1"
+  benchmark_cases_jsonl: "b2ca40dfd22945075a3ec825316b690973fe5cbdac41c4cca7841cdef9c725bc"
+  benchmark_case_schema_json: "f690493d2c90a8ca5430c7df318090a387d6cece1fce6ad4fc8ceeb754e9f650"
+  corpus:
+    moon_phase_txt: "5a9789ac5e548bc9f6717bb4a5bc986140e6c12ebb08e776a5a06ade9554deac"
+    solar_system_txt: "714d3e075e863bca8fd36b5713678173c3dcdc93d74b736f6b4db2b29ee2de24"
+    black_hole_txt: "63708e393508507904eece2005185f4bb28c4e425bc53f12c0763d8b4c4f8402"
+    planetarium_guide_txt: "6ceb4bb9764b0e52f08ca08181530fdca22bdac13641abc3b9048bb879e1d7a1"
+    museum_faq_txt: "bc70ffaa5b90f80b75398c1b518f4ddbb8408813a27d2988bfeaa9cd4af168a2"
+
+validation:
+  unit_tests: "59 passed, 1 explicit Ollama integration test skipped in the default suite"
+  ollama_integration: "passed separately: local embeddinggemma -> temporary Chroma"
+  compileall: "passed: app.py src tests"
+
+limitations:
+  - "9問は全てsmoke splitであり、dev/testではない。"
+  - "同じデモ資料と質問でしきい値が調整済みのため、汎化性能を示さない。"
+  - "この時点ではCLI、隔離DB/Chroma、実Ollama Benchmark runを含まない。"
+  - "研究用Datasetには別Corpus、dev/test分離、専門家によるGold Label確認が必要。"

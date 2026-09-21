@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/science-museum-rag-benchmark/case.schema.json",
+  "title": "Science Museum RAG Benchmark Case",
+  "description": "公開可能な架空資料を使うRAGベンチマーク1問分の形式",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "split",
+    "category",
+    "question",
+    "options",
+    "expected",
+    "tags"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "id": {"type": "string", "minLength": 1},
+    "split": {"enum": ["smoke", "dev", "test"]},
+    "category": {"enum": ["answerable", "unrelated", "insufficient"]},
+    "question": {"type": "string", "minLength": 1},
+    "options": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["visitor_profile", "explanation_scene", "response_language"],
+      "properties": {
+        "visitor_profile": {"type": "string", "minLength": 1},
+        "explanation_scene": {"type": "string", "minLength": 1},
+        "response_language": {"type": "string", "minLength": 1}
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "answerability",
+        "gold_sources",
+        "required_facts",
+        "forbidden_claims"
+      ],
+      "properties": {
+        "status": {"enum": ["answered", "low_relevance", "unanswerable"]},
+        "answerability": {"enum": ["YES", "NO", "NOT_RUN"]},
+        "gold_sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source_name", "page_number"],
+            "properties": {
+              "source_name": {"type": "string", "minLength": 1},
+              "page_number": {
+                "anyOf": [
+                  {"type": "integer", "minimum": 1},
+                  {"type": "null"}
+                ]
+              }
+            }
+          }
+        },
+        "required_facts": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "forbidden_claims": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "tags": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    }
+  }
+}

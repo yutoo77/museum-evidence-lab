@@ -1,0 +1,5 @@
+# Comparison application. Optional old Chroma tests use requirements-legacy.txt.
+streamlit==1.60.0
+PyMuPDF==1.28.0
+httpx==0.28.1
+PyYAML==6.0.3

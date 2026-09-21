@@ -1,0 +1,44 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+outputs/
+.streamlit/secrets.toml
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db-journal
+*.gguf
+*.safetensors
+
+# ビルド・パッケージ生成物
+build/
+dist/
+*.egg-info/
+
+# 公開リポジトリへ含めない一時作業領域
+work/
+
+# 実行時に生成されるローカルデータ
+data/lab/
+data/app.db
+data/app.db-*
+data/chroma/*
+data/documents/*
+data/logs/*
+!data/chroma/.gitkeep
+!data/documents/.gitkeep
+!data/logs/.gitkeep
+
+# OS・エディタ
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

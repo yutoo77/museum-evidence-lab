@@ -1,0 +1,26 @@
+app:
+  title: "科学館職員向け 資料検索・回答支援"
+  max_upload_mb: 50
+
+ollama:
+  base_url: "http://127.0.0.1:11434"
+  embedding_model: "embeddinggemma"
+  generation_model: "qwen3:1.7b"
+  timeout_seconds: 120
+  embedding_batch_size: 16
+
+chunking:
+  chunk_size: 800
+  chunk_overlap: 120
+
+retrieval:
+  top_k: 5
+  distance_threshold: 0.75
+
+storage:
+  documents_dir: "data/documents"
+  chroma_dir: "data/chroma"
+  database_path: "data/app.db"
+  log_dir: "data/logs"
+  interaction_log_path: "data/logs/interactions.jsonl"
+  collection_name: "science_museum_documents"

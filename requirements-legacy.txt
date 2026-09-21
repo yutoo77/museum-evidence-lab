@@ -1,0 +1,4 @@
+# Optional old-app reproduction only. See SECURITY.md before installing.
+# Not needed for Museum Evidence Lab, its comparison modes, or normal CI.
+-r requirements-lab-dev.txt
+chromadb==1.5.9

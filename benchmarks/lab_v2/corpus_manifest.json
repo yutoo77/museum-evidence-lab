@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "self_authored": true,
+  "provenance": "Synthetic fictional museum documents written for this comparison; no research or real museum records. Not expert validated.",
+  "documents": [
+    {"source":"dev/orion_dome.txt","approved":true,"effective_date":"2026-09-01"},
+    {"source":"dev/prism_red.txt","approved":true,"effective_date":null},
+    {"source":"dev/prism_blue.txt","approved":true,"effective_date":null},
+    {"source":"dev/moon_model.txt","approved":true,"effective_date":null},
+    {"source":"dev/echo_pipe.txt","approved":true,"effective_date":null},
+    {"source":"dev/solar_panel.txt","approved":true,"effective_date":null},
+    {"source":"dev/current_opening.txt","approved":true,"effective_date":"2026-09-01"},
+    {"source":"dev/archived_opening.txt","approved":false,"effective_date":"2024-01-01"},
+    {"source":"dev/future_roof.txt","approved":true,"effective_date":"2099-01-01"},
+    {"source":"dev/nebula_capacity_a.txt","approved":true,"effective_date":"2026-09-01"},
+    {"source":"dev/nebula_capacity_b.txt","approved":true,"effective_date":"2026-09-01"},
+    {"source":"dev/tampered_lamp.txt","approved":true,"effective_date":null},
+    {"source":"holdout/rock_samples.txt","approved":true,"effective_date":null},
+    {"source":"holdout/seed_room.txt","approved":true,"effective_date":null},
+    {"source":"holdout/waterlift_small.txt","approved":true,"effective_date":null},
+    {"source":"holdout/waterlift_large.txt","approved":true,"effective_date":null},
+    {"source":"holdout/pendulum.txt","approved":true,"effective_date":null},
+    {"source":"holdout/weather_station.txt","approved":true,"effective_date":null},
+    {"source":"holdout/current_workshop.txt","approved":true,"effective_date":"2026-09-01"},
+    {"source":"holdout/archived_lockers.txt","approved":false,"effective_date":"2023-01-01"},
+    {"source":"holdout/future_greenhouse.txt","approved":true,"effective_date":"2099-01-01"},
+    {"source":"holdout/sandbox_depth_a.txt","approved":true,"effective_date":"2026-09-01"},
+    {"source":"holdout/sandbox_depth_b.txt","approved":true,"effective_date":"2026-09-01"},
+    {"source":"holdout/tampered_compass.txt","approved":true,"effective_date":null}
+  ]
+}
