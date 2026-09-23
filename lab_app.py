@@ -1,7 +1,7 @@
 """Offline staff interface for the isolated evidence comparison application."""
 
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import streamlit as st
@@ -50,6 +50,17 @@ def sources(evidence):
             st.text(passage.text)
 
 
+def local_time(value):
+    try:
+        return (
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
+            .astimezone()
+            .strftime("%Y/%m/%d %H:%M")
+        )
+    except (AttributeError, TypeError, ValueError):
+        return str(value)
+
+
 def render_answer(result):
     if result.status == "answered":
         label = "承認済みの回答" if result.route == "approved_faq" else "資料にある説明"
@@ -60,6 +71,14 @@ def render_answer(result):
         st.subheader(label)
         if result.route == "explain":
             st.caption("利用前に根拠をご確認ください。")
+        reviewed_context = getattr(result, "reviewed_qa_context", ())
+        if reviewed_context:
+            st.caption("職員確認済みQ&Aを回答作成時の参考候補に含めました。")
+            with st.expander("参考候補になった確認済みQ&A"):
+                for item in reviewed_context:
+                    st.text(f"質問: {item.question}")
+                    st.text(f"確認済み回答: {item.approved_answer}")
+                    st.text(f"確認日時: {local_time(item.created_at)}")
         for number, claim in enumerate(result.claims, 1):
             st.text(claim.text)
             if result.route in {"explain", "concise"}:
@@ -126,6 +145,83 @@ def render_answer(result):
         )
 
 
+def forget_answer():
+    for key in (
+        "last_result",
+        "last_revision",
+        "review_confirmed",
+        "review_editor_open",
+        "review_draft",
+        "review_saved_id",
+        "review_save_error",
+    ):
+        st.session_state.pop(key, None)
+
+
+def render_review_actions(result):
+    if st.session_state.get("review_saved_id") is not None:
+        st.success("職員確認済みQ&Aとして保存しました。")
+        return
+    if st.session_state.get("review_save_error"):
+        st.error(st.session_state.review_save_error)
+    st.caption("回答と根拠を確認してから保存してください。")
+    checked = st.checkbox("回答と根拠を確認しました", key="review_confirmed")
+    approve_column, edit_column = st.columns(2)
+    with approve_column:
+        st.button(
+            "この回答で問題ない",
+            disabled=not checked or not st.session_state.get("last_revision"),
+            width="stretch",
+            on_click=save_reviewed_answer,
+            args=(result, result.text),
+        )
+    with edit_column:
+        if st.button("修正して保存", width="stretch"):
+            st.session_state.review_editor_open = True
+    if st.session_state.get("review_editor_open"):
+        st.caption("修正後の内容も原文に照らしてください。")
+        st.text_area(
+            "修正後の回答",
+            value=result.text,
+            height=180,
+            max_chars=803,
+            key="review_draft",
+        )
+        st.button(
+            "確認済みQ&Aとして保存",
+            disabled=(
+                not checked
+                or not st.session_state.get("review_draft", "").strip()
+                or not st.session_state.get("last_revision")
+            ),
+            on_click=save_reviewed_answer,
+            args=(result,),
+        )
+
+
+def save_reviewed_answer(result, approved_answer=None):
+    if approved_answer is None:
+        approved_answer = st.session_state.get("review_draft", "")
+    try:
+        record = bundle().index.save_reviewed_qa(
+            st.session_state.last_question,
+            result,
+            approved_answer,
+            st.session_state.last_revision,
+            audience=st.session_state.last_audience,
+            detail=st.session_state.last_detail,
+        )
+    except ValueError:
+        st.session_state.review_save_error = "保存できませんでした。回答と元資料を確認し、必要ならもう一度調べてください。"
+    except Exception:
+        st.session_state.review_save_error = (
+            "保存に失敗しました。ローカルAIの接続を確認して、もう一度お試しください。"
+        )
+    else:
+        st.session_state.pop("review_save_error", None)
+        st.session_state.review_saved_id = record.id
+
+
 settings = load_lab_settings(ROOT / "lab_config.yaml")
 st.session_state.setdefault("model", settings.ollama.generation_model)
 st.session_state.setdefault("ready", False)
@@ -134,7 +230,7 @@ with st.sidebar:
     st.caption("科学館職員向け · ローカル比較版")
     page = st.radio(
         "画面",
-        ["資料を調べる", "資料を管理", "比較結果", "設定"],
+        ["資料を調べる", "確認済みQ&A", "資料を管理", "比較結果", "設定"],
         label_visibility="collapsed",
     )
     st.divider()
@@ -213,7 +309,7 @@ if page == "資料を調べる":
             )
         )
     ):
-        st.session_state.pop("last_result", None)
+        forget_answer()
     ask = st.button(
         "調べる",
         type="primary",
@@ -230,8 +326,9 @@ if page == "資料を調べる":
             st.subheader("根拠の原文")
             evidence_box = st.empty()
     if ask:
-        st.session_state.pop("last_result", None)
+        forget_answer()
         current = bundle()
+        query_revision = current.index.revision
 
         def display_early(evidence):
             with evidence_box.container():
@@ -247,6 +344,7 @@ if page == "資料を調べる":
                     detail=detail,
                 )
         st.session_state.last_result = result
+        st.session_state.last_revision = query_revision
         st.session_state.last_question = question
         st.session_state.last_mode = mode
         st.session_state.last_audience = audience
@@ -255,6 +353,12 @@ if page == "資料を調べる":
     if isinstance(result, LabAnswer):
         with answer_column:
             render_answer(result)
+            if (
+                mode == "explain"
+                and result.status == "answered"
+                and result.route == "explain"
+            ):
+                render_review_actions(result)
             if (
                 mode != "explain"
                 and result.status == "answered"
@@ -280,6 +384,67 @@ if page == "資料を調べる":
                         st.success("このPCに保存しました。")
         with evidence_box.container():
             sources(result.evidence)
+
+elif page == "確認済みQ&A":
+    st.title("確認済みQ&A")
+    st.caption("職員が確認した回答です。元資料が変わったものは再確認が必要です。")
+    try:
+        reviewed_items = bundle().index.list_reviewed_qa()
+    except Exception:
+        st.error("一覧を開けませんでした。ローカルAIの接続を確認してください。")
+    else:
+        if not reviewed_items:
+            st.info("保存されたQ&Aはまだありません。")
+        status_labels = {
+            "confirmed": "確認済み",
+            "needs_review": "再確認が必要",
+            "archived": "無効",
+        }
+        audience_labels = {
+            "general": "一般向け",
+            "child": "子ども向け",
+            "staff": "職員向け",
+        }
+        detail_labels = {"standard": "標準", "short": "短く"}
+        for item in reviewed_items:
+            with st.container(border=True):
+                st.text(item.question)
+                st.text(
+                    f"{status_labels.get(item.status, item.status)} · 保存日時 {local_time(item.created_at)}"
+                )
+                with st.expander("回答と根拠"):
+                    st.text(
+                        f"対象 {audience_labels.get(item.audience, item.audience)} · 長さ {detail_labels.get(item.detail, item.detail)}"
+                    )
+                    st.text(item.approved_answer)
+                    shown_sources = set()
+                    for source in item.source_refs:
+                        source_key = (source.source_name, source.quote)
+                        if source_key in shown_sources:
+                            continue
+                        shown_sources.add(source_key)
+                        st.text(f"根拠資料: {source.source_name}")
+                        st.text(source.quote)
+                    with st.expander("最初のAI回答"):
+                        st.text(item.original_generated_answer)
+                    if item.status != "archived":
+                        confirm = st.checkbox(
+                            "このQ&Aを無効にする",
+                            key=f"archive-confirm-{item.id}",
+                        )
+                        if st.button(
+                            "無効にする",
+                            key=f"archive-{item.id}",
+                            disabled=not confirm,
+                        ):
+                            try:
+                                bundle().index.archive_reviewed_qa(item.id)
+                            except Exception:
+                                st.error(
+                                    "無効にできませんでした。もう一度お試しください。"
+                                )
+                            else:
+                                st.rerun()
 
 elif page == "資料を管理":
     st.title("資料を管理")
@@ -431,7 +596,7 @@ else:
     if selected != st.session_state.model:
         st.session_state.model = selected
         st.session_state.ready = False
-        st.session_state.pop("last_result", None)
+        forget_answer()
         st.rerun()
     st.caption(
         "変更後は「AIを準備」を押してください。モデルの取得は自動では行いません。"

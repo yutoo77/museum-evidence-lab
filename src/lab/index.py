@@ -18,14 +18,22 @@ from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from src.chunking import chunk_document
 from src.document_loader import DocumentLoader
 from src.embeddings import EmbeddingProvider
-from src.lab.contracts import Evidence, SearchResult
+from src.lab.contracts import Evidence, LabAnswer, SearchResult
+from src.lab.explanation import fact_tokens
+from src.lab.grounding import INJECTION, REMOTE
+from src.lab.reviewed_qa import (
+    QASourceRef,
+    ReviewedQA,
+    ensure_reviewed_qa_schema,
+    load_reviewed_qa,
+)
 
 MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 _SCHEMA_VERSION = 1
@@ -39,6 +47,14 @@ _BOILERPLATE = re.compile(
 )
 _STOP_WORDS = {"a", "an", "the", "is", "are", "what", "how", "of", "to", "in", "and"}
 _STOP_GRAMS = {"です", "ます", "する", "して", "とは", "は何", "何か", "もの", "こと"}
+_QA_AUDIENCES = {"general", "child", "staff"}
+_QA_DETAILS = {"short", "standard"}
+# Reviewed text can steer a later explanation, so require a closer semantic match.
+_QA_DISTANCE_CAP = 0.45
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 class IndexMismatchError(ValueError):
@@ -138,6 +154,7 @@ class HybridIndex:
                 CREATE INDEX IF NOT EXISTS documents_content_hash ON documents(content_hash);
                 """
             )
+            ensure_reviewed_qa_schema(db)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -262,6 +279,17 @@ class HybridIndex:
             current = self._check_fingerprint(db)
             if current is not None and current != new_fingerprint:
                 raise IndexMismatchError("検索モデルの次元が索引と一致しません。")
+            current_document = db.execute(
+                "SELECT 1 FROM documents WHERE logical_source = ?", (logical_source,)
+            ).fetchone()
+            if current_document is not None:
+                db.execute(
+                    """UPDATE reviewed_qa SET status = 'needs_review', updated_at = ?
+                    WHERE status = 'confirmed' AND id IN (
+                        SELECT qa_id FROM reviewed_qa_sources WHERE logical_source = ?
+                    )""",
+                    (_utc_now(), logical_source),
+                )
             db.execute(
                 "DELETE FROM documents WHERE logical_source = ?", (logical_source,)
             )
@@ -395,12 +423,200 @@ class HybridIndex:
             FROM documents ORDER BY logical_source"""
             )
         ]
+        qa_states = [
+            tuple(row)
+            for row in db.execute(
+                "SELECT id, status, updated_at FROM reviewed_qa ORDER BY id"
+            )
+        ]
         return hashlib.sha256(
-            _canonical([fingerprint, docs, active_ids]).encode("utf-8")
+            _canonical([fingerprint, docs, active_ids, qa_states]).encode("utf-8")
         ).hexdigest()
 
     def export_passages(self) -> tuple[Evidence, ...]:
         return tuple(evidence for evidence, _ in self._snapshot()[0])
+
+    def save_reviewed_qa(
+        self,
+        question: str,
+        answer: LabAnswer,
+        approved_answer: str,
+        expected_revision: str,
+        *,
+        audience: str = "general",
+        detail: str = "standard",
+    ) -> ReviewedQA:
+        """Save a staff-confirmed explanation only against its current sources."""
+        if (
+            not isinstance(question, str)
+            or not question.strip()
+            or len(question) > 1500
+            or not isinstance(approved_answer, str)
+            or not approved_answer.strip()
+            or len(approved_answer) > 803
+            or not isinstance(expected_revision, str)
+            or not expected_revision
+            or not isinstance(audience, str)
+            or not isinstance(detail, str)
+            or audience not in _QA_AUDIENCES
+            or detail not in _QA_DETAILS
+        ):
+            raise ValueError("質問・確認済み回答・検索状態を確認してください。")
+        if (
+            not isinstance(answer, LabAnswer)
+            or answer.status != "answered"
+            or answer.route != "explain"
+        ):
+            raise ValueError("根拠のある説明案だけを確認済みQ&Aとして保存できます。")
+        question = question.strip()
+        approved_answer = approved_answer.strip()
+        if (
+            INJECTION.search(question)
+            or REMOTE.search(question)
+            or INJECTION.search(approved_answer)
+            or REMOTE.search(approved_answer)
+        ):
+            raise ValueError("この内容は確認済みQ&Aとして保存できません。")
+        original_answer = answer.text.strip()
+        if not original_answer or len(original_answer) > 1500:
+            raise ValueError("元の説明案を確認できません。")
+        by_id = {passage.evidence_id: passage for passage in answer.evidence}
+        source_refs: dict[tuple[str, str], QASourceRef] = {}
+        for claim in answer.claims:
+            if not claim.references:
+                raise ValueError("根拠のない説明案は保存できません。")
+            for reference in claim.references:
+                passage = by_id.get(reference.evidence_id)
+                if (
+                    passage is None
+                    or not reference.quote
+                    or reference.quote not in passage.text
+                    or not passage.content_hash
+                ):
+                    raise ValueError("引用元を確認できない説明案は保存できません。")
+                source_refs[(reference.evidence_id, reference.quote)] = QASourceRef(
+                    passage.source_name,
+                    passage.content_hash,
+                    reference.evidence_id,
+                    reference.quote,
+                )
+        if not source_refs:
+            raise ValueError("根拠のない説明案は保存できません。")
+        supported_tokens = set().union(
+            *(fact_tokens(ref.quote) for ref in source_refs.values())
+        )
+        if not fact_tokens(approved_answer) <= supported_tokens:
+            raise ValueError(
+                "修正後の回答に、引用元で確認できない数値や識別子があります。"
+            )
+        raw_vectors = self.provider.embed_texts([question])
+        self._check_returned_digest()
+        if len(raw_vectors) != 1:
+            raise InvalidEmbeddingError("確認済みQ&Aの検索用の数値が不正です。")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            fingerprint = self._check_fingerprint(db)
+            active_ids = [
+                row[0]
+                for row in db.execute(
+                    """SELECT p.evidence_id FROM passages p
+                    JOIN documents d ON d.logical_source = p.logical_source
+                    WHERE d.approved = 1 AND (d.effective_date IS NULL OR d.effective_date <= ?)
+                    ORDER BY p.evidence_id""",
+                    (date.today().isoformat(),),
+                )
+            ]
+            if self._revision(db, fingerprint, active_ids) != expected_revision:
+                raise ValueError(
+                    "資料や確認済みQ&Aが更新されました。もう一度質問してください。"
+                )
+            if fingerprint is None:
+                raise ValueError("根拠資料を確認できません。")
+            vector = _unit_vector(raw_vectors[0], fingerprint["dimension"])
+            for reference in source_refs.values():
+                row = db.execute(
+                    """SELECT p.text, d.logical_source, d.source_name, d.content_hash
+                    FROM passages p JOIN documents d ON d.logical_source = p.logical_source
+                    WHERE p.evidence_id = ? AND d.approved = 1
+                      AND (d.effective_date IS NULL OR d.effective_date <= ?)""",
+                    (reference.evidence_id, date.today().isoformat()),
+                ).fetchone()
+                if (
+                    row is None
+                    or row["source_name"] != reference.source_name
+                    or row["content_hash"] != reference.content_hash
+                    or reference.quote not in row["text"]
+                ):
+                    raise ValueError(
+                        "参照資料が更新されました。もう一度質問してください。"
+                    )
+            now = _utc_now()
+            cursor = db.execute(
+                """INSERT INTO reviewed_qa
+                (question, original_generated_answer, approved_answer, audience,
+                 detail, vector, created_at, updated_at, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')""",
+                (
+                    question,
+                    original_answer,
+                    approved_answer,
+                    audience,
+                    detail,
+                    _canonical(vector),
+                    now,
+                    now,
+                ),
+            )
+            identifier = int(cursor.lastrowid)
+            for reference in source_refs.values():
+                db.execute(
+                    """INSERT INTO reviewed_qa_sources
+                    (qa_id, logical_source, source_name, content_hash, evidence_id, quote)
+                    VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        identifier,
+                        reference.source_name.casefold(),
+                        reference.source_name,
+                        reference.content_hash,
+                        reference.evidence_id,
+                        reference.quote,
+                    ),
+                )
+        ordered_refs = tuple(
+            sorted(source_refs.values(), key=lambda ref: (ref.evidence_id, ref.quote))
+        )
+        return ReviewedQA(
+            identifier,
+            question,
+            original_answer,
+            approved_answer,
+            now,
+            now,
+            "confirmed",
+            ordered_refs,
+            audience,
+            detail,
+        )
+
+    def list_reviewed_qa(self) -> list[ReviewedQA]:
+        with self._connect() as db:
+            return load_reviewed_qa(db)
+
+    def archive_reviewed_qa(self, identifier: int) -> None:
+        if type(identifier) is not int or identifier < 1:
+            raise ValueError("確認済みQ&Aの番号を確認してください。")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT status FROM reviewed_qa WHERE id = ?", (identifier,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("確認済みQ&Aが見つかりません。")
+            if row["status"] != "archived":
+                db.execute(
+                    "UPDATE reviewed_qa SET status = 'archived', updated_at = ? WHERE id = ?",
+                    (_utc_now(), identifier),
+                )
 
     @staticmethod
     def _lexical_scores(
@@ -439,6 +655,124 @@ class HybridIndex:
             strong.append(coverage >= 0.5 and len(matched) >= min(2, len(query)))
         return scores, strong
 
+    def _rank_reviewed_qa(
+        self,
+        question: str,
+        active_passages: list[tuple[Evidence, list[float]]],
+        query_vector: list[float] | None,
+        dimension: int | None,
+        *,
+        audience: str,
+        detail: str,
+        threshold: float,
+        deadline: float | None,
+    ) -> tuple[ReviewedQA, ...]:
+        """Use the document search signals; never treat Q&A as original evidence."""
+        with self._connect() as db:
+            records = load_reviewed_qa(
+                db, status="confirmed", audience=audience, detail=detail
+            )
+            if not records:
+                return ()
+            vectors = {
+                row["id"]: row["vector"]
+                for row in db.execute(
+                    "SELECT id, vector FROM reviewed_qa WHERE status = 'confirmed' "
+                    "AND audience = ? AND detail = ?",
+                    (audience, detail),
+                )
+            }
+        _remaining(deadline)
+        by_id = {passage.evidence_id: passage for passage, _ in active_passages}
+        eligible: list[ReviewedQA] = []
+        qa_vectors: list[list[float]] = []
+        for record in records:
+            if (
+                not record.source_refs
+                or INJECTION.search(record.approved_answer)
+                or REMOTE.search(record.approved_answer)
+                or any(
+                    (passage := by_id.get(ref.evidence_id)) is None
+                    or passage.source_name != ref.source_name
+                    or passage.content_hash != ref.content_hash
+                    or ref.quote not in passage.text
+                    for ref in record.source_refs
+                )
+            ):
+                continue
+            try:
+                vector = _unit_vector(json.loads(vectors[record.id]), dimension)
+            except (
+                KeyError,
+                ValueError,
+                TypeError,
+                InvalidEmbeddingError,
+                IndexMismatchError,
+            ):
+                continue
+            eligible.append(record)
+            qa_vectors.append(vector)
+        if not eligible:
+            return ()
+        lexical, strong_lexical = self._lexical_scores(
+            question,
+            [
+                Evidence(f"Q{record.id}", record.question, "", None, "")
+                for record in eligible
+            ],
+        )
+        if query_vector is None:
+            distances = [1.0] * len(eligible)
+        else:
+            distances = [
+                1.0
+                - max(
+                    -1.0,
+                    min(
+                        1.0,
+                        sum(a * b for a, b in zip(query_vector, vector, strict=True)),
+                    ),
+                )
+                for vector in qa_vectors
+            ]
+        dense_order = sorted(
+            range(len(eligible)), key=lambda i: (distances[i], -eligible[i].id)
+        )
+        lexical_order = sorted(
+            range(len(eligible)), key=lambda i: (-lexical[i], -eligible[i].id)
+        )
+        if query_vector is None:
+            order = lexical_order
+        else:
+            rrf = Counter(
+                {i: 1.0 / (60 + rank) for rank, i in enumerate(dense_order, 1)}
+            )
+            for rank, i in enumerate(lexical_order, 1):
+                if lexical[i] > 0:
+                    rrf[i] += 1.0 / (60 + rank)
+            order = sorted(
+                range(len(eligible)),
+                key=lambda i: (-rrf[i], distances[i], -eligible[i].id),
+            )
+        best_distance = min(distances)
+        best_lexical = max(lexical)
+        selected: list[ReviewedQA] = []
+        for i in order:
+            dense_relevant = query_vector is not None and distances[i] <= min(
+                threshold, _QA_DISTANCE_CAP, best_distance + 0.2
+            )
+            lexical_relevant = strong_lexical[i] and lexical[i] >= best_lexical * 0.35
+            if dense_relevant or lexical_relevant:
+                _remaining(deadline)
+                selected.append(
+                    replace(
+                        eligible[i], distance=distances[i], lexical_score=lexical[i]
+                    )
+                )
+                if len(selected) >= 3:
+                    break
+        return tuple(selected)
+
     def search(
         self,
         question: str,
@@ -448,6 +782,9 @@ class HybridIndex:
         max_context_chars: int = 1800,
         threshold: float = 0.75,
         timeout_seconds: float | None = None,
+        include_reviewed_qa: bool = False,
+        reviewed_audience: str = "general",
+        reviewed_detail: str = "standard",
     ) -> SearchResult:
         started = time.perf_counter()
         if timeout_seconds is not None and (
@@ -459,6 +796,16 @@ class HybridIndex:
         deadline = started + timeout_seconds if timeout_seconds is not None else None
         if mode not in {"hybrid", "dense", "lexical"}:
             raise ValueError("mode must be hybrid, dense, or lexical")
+        if type(include_reviewed_qa) is not bool or (
+            include_reviewed_qa
+            and (
+                not isinstance(reviewed_audience, str)
+                or not isinstance(reviewed_detail, str)
+                or reviewed_audience not in _QA_AUDIENCES
+                or reviewed_detail not in _QA_DETAILS
+            )
+        ):
+            raise ValueError("確認済みQ&Aの検索条件を確認してください。")
         if max_evidence < 1 or max_context_chars < 1 or not 0 <= threshold <= 2:
             raise ValueError(
                 "invalid evidence limit, context budget, or distance threshold"
@@ -472,6 +819,7 @@ class HybridIndex:
         evidence = [item for item, _ in passages]
         embedding_seconds = 0.0
         distances = [1.0] * len(passages)
+        query_vector = None
         if mode != "lexical":
             embedding_started = time.perf_counter()
             kwargs = (
@@ -485,6 +833,7 @@ class HybridIndex:
             if len(raw) != 1:
                 raise InvalidEmbeddingError("質問の検索用数値の件数が不正です。")
             query = _unit_vector(raw[0], dimension)
+            query_vector = query
             embedding_seconds = time.perf_counter() - embedding_started
             distances = [
                 1.0
@@ -508,13 +857,28 @@ class HybridIndex:
         if mode == "dense":
             candidates = tuple(enriched[i] for i in dense_order)
             _remaining(deadline)
-            return SearchResult(
+            response = SearchResult(
                 candidates[:5],
                 candidates,
                 time.perf_counter() - started,
                 embedding_seconds,
                 revision,
             )
+            if include_reviewed_qa:
+                response = replace(
+                    response,
+                    reviewed_qa=self._rank_reviewed_qa(
+                        question,
+                        passages,
+                        query_vector,
+                        dimension,
+                        audience=reviewed_audience,
+                        detail=reviewed_detail,
+                        threshold=threshold,
+                        deadline=deadline,
+                    ),
+                )
+            return replace(response, elapsed_seconds=time.perf_counter() - started)
         if mode == "lexical":
             order = lexical_order
         else:
@@ -550,10 +914,25 @@ class HybridIndex:
             if len(selected) >= max_evidence:
                 break
         _remaining(deadline)
-        return SearchResult(
+        response = SearchResult(
             tuple(selected),
             tuple(enriched[i] for i in order),
             time.perf_counter() - started,
             embedding_seconds,
             revision,
         )
+        if include_reviewed_qa:
+            response = replace(
+                response,
+                reviewed_qa=self._rank_reviewed_qa(
+                    question,
+                    passages,
+                    query_vector,
+                    dimension,
+                    audience=reviewed_audience,
+                    detail=reviewed_detail,
+                    threshold=threshold,
+                    deadline=deadline,
+                ),
+            )
+        return replace(response, elapsed_seconds=time.perf_counter() - started)

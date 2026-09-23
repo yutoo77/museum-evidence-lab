@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from src.lab.reviewed_qa import ReviewedQA
+
 
 @dataclass(frozen=True)
 class Evidence:
@@ -24,6 +26,7 @@ class SearchResult:
     elapsed_seconds: float = 0.0
     embedding_seconds: float = 0.0
     revision: str = ""
+    reviewed_qa: tuple[ReviewedQA, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,19 @@ class Claim:
 
 
 @dataclass(frozen=True)
+class ReviewedQAContext:
+    """A staff-reviewed Q&A included as context for an explanation draft.
+
+    Inclusion does not prove that the final wording adopted the earlier answer.
+    """
+
+    id: int
+    question: str
+    approved_answer: str
+    created_at: str
+
+
+@dataclass(frozen=True)
 class LabAnswer:
     status: str
     message: str
@@ -68,6 +84,7 @@ class LabAnswer:
     timings: dict[str, float] = field(default_factory=dict)
     calls: tuple[dict[str, float | int | str], ...] = ()
     issues: tuple[str, ...] = ()
+    reviewed_qa_context: tuple[ReviewedQAContext, ...] = ()
 
     @property
     def text(self) -> str:

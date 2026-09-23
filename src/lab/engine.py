@@ -8,7 +8,7 @@ import time
 from dataclasses import replace
 from typing import Callable
 
-from src.lab.contracts import Claim, Evidence, LabAnswer
+from src.lab.contracts import Claim, Evidence, LabAnswer, ReviewedQAContext
 from src.lab.explanation import (
     AUDIENCES,
     DETAILS,
@@ -187,6 +187,38 @@ class _NoLog:
         pass
 
 
+def _reviewed_context_candidates(candidates, evidence, *, audience, detail):
+    """Use only current, fully source-backed staff knowledge as draft context."""
+    current = {passage.evidence_id: passage for passage in evidence}
+    for item in candidates:
+        if (
+            item.status != "confirmed"
+            or item.audience != audience
+            or item.detail != detail
+            or not item.source_refs
+            or not item.question.strip()
+            or not item.approved_answer.strip()
+            or len(item.question) > 1500
+            or len(item.approved_answer) > 803
+            or _INJECTION.search(item.question)
+            or _INJECTION.search(item.approved_answer)
+            or _REMOTE.search(item.question)
+            or _REMOTE.search(item.approved_answer)
+        ):
+            continue
+        if not all(
+            (passage := current.get(ref.evidence_id)) is not None
+            and passage.content_hash == ref.content_hash
+            and passage.source_name == ref.source_name
+            and ref.quote in passage.text
+            for ref in item.source_refs
+        ):
+            continue
+        # A single related example keeps the extra prompt context bounded.
+        return (item,)
+    return ()
+
+
 class LabEngine:
     def __init__(
         self,
@@ -331,6 +363,15 @@ class LabEngine:
             result = self.index.search(
                 question,
                 mode="dense" if mode == "baseline" else "hybrid",
+                **(
+                    {
+                        "include_reviewed_qa": True,
+                        "reviewed_audience": audience,
+                        "reviewed_detail": detail,
+                    }
+                    if mode == "explain"
+                    else {}
+                ),
                 max_evidence=self.max_evidence,
                 max_context_chars=self.max_context_chars,
                 threshold=self.threshold,
@@ -358,14 +399,26 @@ class LabEngine:
                     )
                 )
             if mode == "explain":
-                return finish(
-                    replace(
-                        self._explain(
-                            question, evidence, audience, detail, calls, start
-                        ),
-                        route="explain",
-                    )
+                reviewed = _reviewed_context_candidates(
+                    result.reviewed_qa, evidence, audience=audience, detail=detail
                 )
+                answer = self._explain(
+                    question, evidence, audience, detail, calls, start, reviewed
+                )
+                if answer.status == "answered" and reviewed:
+                    answer = replace(
+                        answer,
+                        reviewed_qa_context=tuple(
+                            ReviewedQAContext(
+                                item.id,
+                                item.question,
+                                item.approved_answer,
+                                item.created_at,
+                            )
+                            for item in reviewed
+                        ),
+                    )
+                return finish(replace(answer, route="explain"))
             answer = self._select(question, evidence, mode == "concise", calls, start)
             route = "concise" if mode == "concise" else "quoted"
             if (
@@ -407,7 +460,9 @@ class LabEngine:
                 )
             )
 
-    def _explain(self, question, evidence, audience, detail, calls, started):
+    def _explain(
+        self, question, evidence, audience, detail, calls, started, reviewed_qa=()
+    ):
         if any(_INJECTION.search(passage.text) for passage in evidence):
             return LabAnswer(
                 "refused",
@@ -432,7 +487,11 @@ class LabEngine:
                 issues=("time_budget",),
             )
         system, user = explanation_prompts(
-            question, evidence, audience=audience, detail=detail
+            question,
+            evidence,
+            audience=audience,
+            detail=detail,
+            reviewed_qa=reviewed_qa,
         )
         generation_tokens = 450 if detail == "short" else 700
         reply = self.client.chat(
