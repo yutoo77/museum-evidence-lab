@@ -57,5 +57,5 @@ def render(services: ApplicationServices) -> None:
         )
         st.markdown(
             "[Source code・ライセンスを確認する]"
-            "(https://github.com/yutoo77/museum-evidence-assistant)"
+            "(https://github.com/yutoo77/museum-evidence-lab)"
         )
